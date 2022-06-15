@@ -80,7 +80,7 @@ abstract contract TokenGate is TokenBundle {
         if(_token.tokenType == TokenType.ERC20) {
             success = IERC20(_token.assetContract).balanceOf(_target) > _token.totalAmount;
         } else if (_token.tokenType == TokenType.ERC721) {
-            success = IERC721(_token.assetContract).ownerOf(_token.tokenId) == _target;
+            success = IERC721(_token.assetContract).balanceOf(_target) > 0;
         } else if (_token.tokenType == TokenType.ERC1155) {
             success = IERC1155(_token.assetContract).balanceOf(_target, _token.tokenId) > _token.totalAmount;
         }
