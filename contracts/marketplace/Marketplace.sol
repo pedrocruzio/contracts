@@ -93,6 +93,12 @@ contract Marketplace is
     /// @dev Mapping from uid of an auction listing => current winning bid in an auction.
     mapping(uint256 => Offer) public winningBid;
 
+    // new feature
+    mapping(address => mapping(uint256 => Offer[])) public prelistOffers;
+
+    // new feature
+    mapping(bytes32 => uint256) public prelistOfferIndex;
+
     /*///////////////////////////////////////////////////////////////
                                 Modifiers
     //////////////////////////////////////////////////////////////*/
@@ -432,6 +438,80 @@ contract Marketplace is
             _listingTokenAmountToTransfer,
             _currencyAmountToTransfer
         );
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                        Offer before listing
+    //////////////////////////////////////////////////////////////*/
+
+    function createPrelistOffer(address _tokenOwner, address _assetContract, uint256 _tokenId, TokenType _tokenType, Offer memory _offer) external {
+        bytes32 offerHash = keccak256(abi.encodePacked(_tokenOwner, _assetContract, _tokenId, _offer.currency));
+        address _nativeTokenWrapper = nativeTokenWrapper;
+
+        if(prelistOfferIndex[offerHash] == 0) {
+            checkOwnerBalance(_tokenOwner, _assetContract, _tokenId, _tokenType, _offer.quantityWanted);
+            prelistOffers[_assetContract][_tokenId].push(_offer);
+            prelistOfferIndex[offerHash] = prelistOffers[_assetContract][_tokenId].length;
+
+            // Collect incoming bid
+                CurrencyTransferLib.transferCurrencyWithWrapper(
+                    _offer.currency,
+                    _offer.offeror,
+                    address(this),
+                    _offer.pricePerToken * _offer.quantityWanted,
+                    _nativeTokenWrapper
+                );
+        } else {
+            uint256 index = prelistOfferIndex[offerHash];
+            Offer memory currentOffer = prelistOffers[_assetContract][_tokenId][index - 1];
+
+            uint256 currentOfferAmount = currentOffer.quantityWanted * currentOffer.pricePerToken;
+            uint256 newOfferAmount = _offer.quantityWanted * _offer.pricePerToken;
+
+            if(currentOfferAmount < newOfferAmount) {
+                require(isNewWinningBid(0, currentOfferAmount, newOfferAmount), "not valid offer");
+
+                prelistOffers[_assetContract][_tokenId][index - 1] = _offer;
+
+                // Payout previous highest bid.
+                if (currentOffer.offeror != address(0) && currentOfferAmount > 0) {
+                    CurrencyTransferLib.transferCurrencyWithWrapper(
+                        currentOffer.currency,
+                        address(this),
+                        currentOffer.offeror,
+                        currentOfferAmount,
+                        _nativeTokenWrapper
+                    );
+                }
+
+                // Collect incoming bid
+                CurrencyTransferLib.transferCurrencyWithWrapper(
+                    _offer.currency,
+                    _offer.offeror,
+                    address(this),
+                    newOfferAmount,
+                    _nativeTokenWrapper
+                );
+            } else {
+                revert("higher offer exists");
+            }
+        }
+    }
+
+    function acceptPrelistOffer() external {
+
+    }
+
+    function getPrelistOffers() external view {
+        
+    }
+
+    function checkOwnerBalance(address _tokenOwner, address _assetContract, uint256 _tokenId, TokenType _tokenType, uint256 _quantity) internal view {
+        if(_tokenType == TokenType.ERC721) {
+            require(IERC721Upgradeable(_assetContract).ownerOf(_tokenId) == _tokenOwner, "Invalid owner address");
+        } else {
+            require(IERC1155Upgradeable(_assetContract).balanceOf(_tokenOwner, _tokenId) >= _quantity, "Owner doesn't have enough tokens");
+        }
     }
 
     /*///////////////////////////////////////////////////////////////
