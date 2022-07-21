@@ -99,6 +99,9 @@ contract Marketplace is
     // new feature
     mapping(bytes32 => uint256) public prelistOfferIndex;
 
+    // new feature
+    mapping(bytes32 => bool) public alreadyListed;
+
     /*///////////////////////////////////////////////////////////////
                                 Modifiers
     //////////////////////////////////////////////////////////////*/
@@ -268,6 +271,9 @@ contract Marketplace is
             transferListingTokens(tokenOwner, address(this), tokenAmountToList, newListing);
         }
 
+        bytes32 listingHash = keccak256(abi.encodePacked(newListing.tokenOwner, newListing.assetContract, newListing.tokenId, newListing.currency));
+        alreadyListed[listingHash] = true;
+
         emit ListingAdded(listingId, _params.assetContract, tokenOwner, newListing);
     }
 
@@ -348,6 +354,9 @@ contract Marketplace is
 
         delete listings[_listingId];
 
+        bytes32 listingHash = keccak256(abi.encodePacked(targetListing.tokenOwner, targetListing.assetContract, targetListing.tokenId, targetListing.currency));
+        alreadyListed[listingHash] = false;
+
         emit ListingRemoved(_listingId, targetListing.tokenOwner);
     }
 
@@ -380,6 +389,9 @@ contract Marketplace is
             targetListing.buyoutPricePerToken * _quantityToBuy,
             _quantityToBuy
         );
+
+        bytes32 listingHash = keccak256(abi.encodePacked(targetListing.tokenOwner, targetListing.assetContract, targetListing.tokenId, targetListing.currency));
+        alreadyListed[listingHash] = false;
     }
 
     /// @dev Lets a listing's creator accept an offer for their direct listing.
@@ -405,6 +417,9 @@ contract Marketplace is
             targetOffer.pricePerToken * targetOffer.quantityWanted,
             targetOffer.quantityWanted
         );
+
+        bytes32 listingHash = keccak256(abi.encodePacked(targetListing.tokenOwner, targetListing.assetContract, targetListing.tokenId, targetListing.currency));
+        alreadyListed[listingHash] = false;
     }
 
     /// @dev Performs a direct listing sale.
@@ -447,6 +462,8 @@ contract Marketplace is
     function createPrelistOffer(address _tokenOwner, address _assetContract, uint256 _tokenId, TokenType _tokenType, Offer memory _offer) external {
         bytes32 offerHash = keccak256(abi.encodePacked(_tokenOwner, _assetContract, _tokenId, _offer.currency));
         address _nativeTokenWrapper = nativeTokenWrapper;
+
+        require(!alreadyListed[offerHash], "already listed");
 
         if(prelistOfferIndex[offerHash] == 0) {
             checkOwnerBalance(_tokenOwner, _assetContract, _tokenId, _tokenType, _offer.quantityWanted);
@@ -710,6 +727,9 @@ contract Marketplace is
         require(listings[_targetListing.listingId].tokenOwner == _msgSender(), "caller is not the listing creator.");
 
         delete listings[_targetListing.listingId];
+
+        bytes32 listingHash = keccak256(abi.encodePacked(_targetListing.tokenOwner, _targetListing.assetContract, _targetListing.tokenId, _targetListing.currency));
+        alreadyListed[listingHash] = false;
 
         transferListingTokens(address(this), _targetListing.tokenOwner, _targetListing.quantity, _targetListing);
 
