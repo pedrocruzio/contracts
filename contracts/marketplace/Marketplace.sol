@@ -97,10 +97,7 @@ contract Marketplace is
     mapping(address => mapping(uint256 => Offer[])) public prelistOffers;
 
     // new feature
-    mapping(bytes32 => uint256) public prelistOfferIndex;
-
-    // new feature
-    mapping(bytes32 => bool) public alreadyListed;
+    mapping(address => mapping(uint256 => uint256)) public prelistOfferCount;
 
     /*///////////////////////////////////////////////////////////////
                                 Modifiers
@@ -271,9 +268,6 @@ contract Marketplace is
             transferListingTokens(tokenOwner, address(this), tokenAmountToList, newListing);
         }
 
-        bytes32 listingHash = keccak256(abi.encodePacked(newListing.tokenOwner, newListing.assetContract, newListing.tokenId, newListing.currency));
-        alreadyListed[listingHash] = true;
-
         emit ListingAdded(listingId, _params.assetContract, tokenOwner, newListing);
     }
 
@@ -354,9 +348,6 @@ contract Marketplace is
 
         delete listings[_listingId];
 
-        bytes32 listingHash = keccak256(abi.encodePacked(targetListing.tokenOwner, targetListing.assetContract, targetListing.tokenId, targetListing.currency));
-        alreadyListed[listingHash] = false;
-
         emit ListingRemoved(_listingId, targetListing.tokenOwner);
     }
 
@@ -389,9 +380,6 @@ contract Marketplace is
             targetListing.buyoutPricePerToken * _quantityToBuy,
             _quantityToBuy
         );
-
-        bytes32 listingHash = keccak256(abi.encodePacked(targetListing.tokenOwner, targetListing.assetContract, targetListing.tokenId, targetListing.currency));
-        alreadyListed[listingHash] = false;
     }
 
     /// @dev Lets a listing's creator accept an offer for their direct listing.
@@ -417,9 +405,6 @@ contract Marketplace is
             targetOffer.pricePerToken * targetOffer.quantityWanted,
             targetOffer.quantityWanted
         );
-
-        bytes32 listingHash = keccak256(abi.encodePacked(targetListing.tokenOwner, targetListing.assetContract, targetListing.tokenId, targetListing.currency));
-        alreadyListed[listingHash] = false;
     }
 
     /// @dev Performs a direct listing sale.
@@ -459,76 +444,74 @@ contract Marketplace is
                         Offer before listing
     //////////////////////////////////////////////////////////////*/
 
-    function createPrelistOffer(address _tokenOwner, address _assetContract, uint256 _tokenId, TokenType _tokenType, Offer memory _offer) external {
-        bytes32 offerHash = keccak256(abi.encodePacked(_tokenOwner, _assetContract, _tokenId, _offer.currency));
-        address _nativeTokenWrapper = nativeTokenWrapper;
+    function createPrelistOffer(address _assetContract, uint256 _tokenId, TokenType _tokenType, Offer memory _offer) external {
+        require(_offer.expirationTimestamp > block.timestamp, "invalid expiry");
+        require(_tokenType != TokenType.ERC721 || _offer.quantityWanted == 1, "invalid quantity");
+        require(_offer.pricePerToken * _offer.quantityWanted > 0, "invalid quantity or price");
 
-        require(!alreadyListed[offerHash], "already listed");
+        prelistOffers[_assetContract][_tokenId].push(_offer);
+        prelistOfferCount[_assetContract][_tokenId] += 1;
+    }
 
-        if(prelistOfferIndex[offerHash] == 0) {
-            checkOwnerBalance(_tokenOwner, _assetContract, _tokenId, _tokenType, _offer.quantityWanted);
-            prelistOffers[_assetContract][_tokenId].push(_offer);
-            prelistOfferIndex[offerHash] = prelistOffers[_assetContract][_tokenId].length;
+    function acceptPrelistOffer(address _assetContract, uint256 _tokenId, TokenType _tokenType, uint256 _offerIndex) external {
+        Offer memory targetOffer = getPrelistOfferAtIndex(_assetContract, _tokenId, _offerIndex);
+        Listing memory tempListing;
 
-            // Collect incoming bid
-                CurrencyTransferLib.transferCurrencyWithWrapper(
-                    _offer.currency,
-                    _offer.offeror,
-                    address(this),
-                    _offer.pricePerToken * _offer.quantityWanted,
-                    _nativeTokenWrapper
-                );
-        } else {
-            uint256 index = prelistOfferIndex[offerHash];
-            Offer memory currentOffer = prelistOffers[_assetContract][_tokenId][index - 1];
+        tempListing.assetContract = _assetContract;
+        tempListing.tokenId = _tokenId;
+        tempListing.tokenType = _tokenType;
 
-            uint256 currentOfferAmount = currentOffer.quantityWanted * currentOffer.pricePerToken;
-            uint256 newOfferAmount = _offer.quantityWanted * _offer.pricePerToken;
+        validateOwnershipAndApproval(msg.sender, _assetContract, _tokenId, targetOffer.quantityWanted, _tokenType);
+        validateERC20BalAndAllowance(targetOffer.offeror, targetOffer.currency, targetOffer.pricePerToken * targetOffer.quantityWanted);
 
-            if(currentOfferAmount < newOfferAmount) {
-                require(isNewWinningBid(0, currentOfferAmount, newOfferAmount), "not valid offer");
+        transferListingTokens(msg.sender, targetOffer.offeror, targetOffer.quantityWanted, tempListing);
+        payout(targetOffer.offeror, msg.sender, targetOffer.currency, targetOffer.pricePerToken * targetOffer.quantityWanted, tempListing);
 
-                prelistOffers[_assetContract][_tokenId][index - 1] = _offer;
+        prelistOffers[_assetContract][_tokenId][_offerIndex].expirationTimestamp = 0;
+        prelistOfferCount[_assetContract][_tokenId] -= 1;
+    }
 
-                // Payout previous highest bid.
-                if (currentOffer.offeror != address(0) && currentOfferAmount > 0) {
-                    CurrencyTransferLib.transferCurrencyWithWrapper(
-                        currentOffer.currency,
-                        address(this),
-                        currentOffer.offeror,
-                        currentOfferAmount,
-                        _nativeTokenWrapper
-                    );
-                }
+    function getPrelistOffers(address _assetContract, uint256 _tokenId) external returns (Offer[] memory) {
+        Offer[] memory totalOffers = prelistOffers[_assetContract][_tokenId];
+        uint256 count = prelistOfferCount[_assetContract][_tokenId];
+        uint256 len = totalOffers.length;
 
-                // Collect incoming bid
-                CurrencyTransferLib.transferCurrencyWithWrapper(
-                    _offer.currency,
-                    _offer.offeror,
-                    address(this),
-                    newOfferAmount,
-                    _nativeTokenWrapper
-                );
-            } else {
-                revert("higher offer exists");
+        for(uint256 i = 0; i < len; i++) {
+            if(totalOffers[i].expirationTimestamp < block.timestamp) {
+                count -= 1;
             }
         }
-    }
-
-    function acceptPrelistOffer() external {
-
-    }
-
-    function getPrelistOffers() external view {
+        prelistOfferCount[_assetContract][_tokenId] = count;
         
+        Offer[] memory offerList = new Offer[](count);
+
+        for(uint256 i = 0; i < len; i++) {
+            if(totalOffers[i].expirationTimestamp < block.timestamp) {
+                offerList[i] = totalOffers[i];
+            }
+        }
+
+        return offerList;
     }
 
-    function checkOwnerBalance(address _tokenOwner, address _assetContract, uint256 _tokenId, TokenType _tokenType, uint256 _quantity) internal view {
-        if(_tokenType == TokenType.ERC721) {
-            require(IERC721Upgradeable(_assetContract).ownerOf(_tokenId) == _tokenOwner, "Invalid owner address");
-        } else {
-            require(IERC1155Upgradeable(_assetContract).balanceOf(_tokenOwner, _tokenId) >= _quantity, "Owner doesn't have enough tokens");
+    function getPrelistOfferAtIndex(address _assetContract, uint256 _tokenId, uint256 _offerIndex) public view returns (Offer memory) {
+        Offer[] memory totalOffers = prelistOffers[_assetContract][_tokenId];
+        uint256 len = totalOffers.length;
+        uint256 index;
+
+        for(uint256 i = 0; i < len; i++) {
+            if(totalOffers[i].expirationTimestamp >= block.timestamp) {
+                if(index == _offerIndex) {
+                    return totalOffers[i];
+                }
+                index += 1;
+            }
         }
+        revert("Invalid offer Id");
+    }
+
+    function getPrelistOfferCount(address _assetContract, uint256 _tokenId) external view returns (uint256) {
+        return prelistOfferCount[_assetContract][_tokenId];
     }
 
     /*///////////////////////////////////////////////////////////////
@@ -727,9 +710,6 @@ contract Marketplace is
         require(listings[_targetListing.listingId].tokenOwner == _msgSender(), "caller is not the listing creator.");
 
         delete listings[_targetListing.listingId];
-
-        bytes32 listingHash = keccak256(abi.encodePacked(_targetListing.tokenOwner, _targetListing.assetContract, _targetListing.tokenId, _targetListing.currency));
-        alreadyListed[listingHash] = false;
 
         transferListingTokens(address(this), _targetListing.tokenOwner, _targetListing.quantity, _targetListing);
 
