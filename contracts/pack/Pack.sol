@@ -76,7 +76,10 @@ contract Pack is
                     Constructor + initializer logic
     //////////////////////////////////////////////////////////////*/
 
-    constructor(address _nativeTokenWrapper, address[] memory _trustedForwarders) TokenStore(_nativeTokenWrapper) initializer {
+    constructor(address _nativeTokenWrapper, address[] memory _trustedForwarders)
+        TokenStore(_nativeTokenWrapper)
+        initializer
+    {
         forwarders = _trustedForwarders;
     }
 
@@ -165,9 +168,10 @@ contract Pack is
         override(ERC1155Receiver, ERC1155Upgradeable, IERC165)
         returns (bool)
     {
-        return super.supportsInterface(interfaceId) 
-                || type(IERC2981Upgradeable).interfaceId == interfaceId
-                || type(IERC721Receiver).interfaceId == interfaceId;
+        return
+            super.supportsInterface(interfaceId) ||
+            type(IERC2981Upgradeable).interfaceId == interfaceId ||
+            type(IERC721Receiver).interfaceId == interfaceId;
     }
 
     /*///////////////////////////////////////////////////////////////
@@ -242,10 +246,7 @@ contract Pack is
         return rewardUnits;
     }
 
-    function withdrawUnclaimedAssets(uint256 _packId) 
-        external
-        nonReentrant
-    {
+    function withdrawUnclaimedAssets(uint256 _packId) external nonReentrant {
         PackInfo memory pack = packInfo[_packId];
         require(block.timestamp >= pack.expirationTimestamp, "pack not expired yet");
         require(_msgSender() == pack.creator, "not creator");
